@@ -6,8 +6,8 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 
 # %%
-RAW_DIR      = r"E:/users_ra_local/fang_ray/IPUMS-CPS/raw"
-OUT_DIR      = r"E:/users_ra_local/fang_ray/IPUMS-CPS/outputs"
+RAW_DIR      = r"E:/users_ra_local/fang_ray/Lifecycle-portfolio-allocation/raw"
+OUT_DIR      = r"E:/users_ra_local/fang_ray/Lifecycle-portfolio-allocation/outputs"
 
 CPS_CSV      = fr"{RAW_DIR}/cps_00001.csv"
 CPI_CSV      = fr"{RAW_DIR}/cpi_u.csv"
@@ -539,4 +539,95 @@ print(ecm_table)
 ECM_CSV = fr"{OUT_DIR}/panel_ecm_robustness.csv"
 ecm_table.to_csv(ECM_CSV, index=False)
 print(f"\nSaved: {ECM_CSV}")
+# %%
+# Part B — Construct Short-Run Labor-Income Betas by Income Group
+crsp_annual = (
+    crsp.groupby("YEAR")
+        .apply(lambda x: (1 + x["VWRETD"]).prod() - 1)
+        .reset_index(name="annual_return")
+)
+
+print("Annual market returns (CRSP VW):")
+print(crsp_annual.head(10))
+
+group_means_sorted = group_means.sort_values(["incgroup", "YEAR"]).reset_index(drop=True)
+group_means_sorted["dln_LABINC"] = group_means_sorted.groupby("incgroup")["ln_RLABINC"].diff()
+
+labor_beta_panel = group_means_sorted.merge(
+    crsp_annual, 
+    on="YEAR", 
+    how="inner"
+)
+
+def estimate_labor_beta(group_data):
+    reg_data = group_data.dropna(subset=["dln_LABINC", "annual_return"])
+
+    Y = reg_data["dln_LABINC"]
+    X = sm.add_constant(reg_data["annual_return"])
+    
+    model = sm.OLS(Y, X).fit()
+    
+    return {
+        "beta": model.params["annual_return"],
+        "beta_tstat": model.tvalues["annual_return"],
+        "beta_pvalue": model.pvalues["annual_return"],
+        "alpha": model.params["const"],
+        "r_squared": model.rsquared,
+        "n_obs": int(model.nobs)
+    }
+
+beta_results = []
+
+for group in labor_beta_panel["incgroup"].unique():
+    group_data = labor_beta_panel[labor_beta_panel["incgroup"] == group]
+    
+    result = estimate_labor_beta(group_data)
+    result["incgroup"] = group
+    
+    beta_results.append(result)
+
+labor_beta_df = pd.DataFrame(beta_results)
+labor_beta_df = labor_beta_df[["incgroup", "beta", "beta_tstat", "beta_pvalue", 
+                               "alpha", "r_squared", "n_obs"]]
+
+print("\nLabor Income Beta Results:")
+print(labor_beta_df)
+
+LABOR_BETA_CSV = fr"{OUT_DIR}/labor_income_betas.csv"
+
+labor_beta_df.to_csv(LABOR_BETA_CSV, index=False)
+
+# %%
+# Bar chart of labor income betas by income group
+plt.figure(figsize=(10, 6))
+
+group_order = ["Bottom50", "Middle40", "Top10", "Top1"]
+labor_beta_df_sorted = labor_beta_df.set_index("incgroup").loc[group_order].reset_index()
+
+bars = plt.bar(labor_beta_df_sorted["incgroup"], 
+               labor_beta_df_sorted["beta"], 
+               color=["lightcoral", "lightblue", "lightgreen", "gold"],
+               edgecolor="black",
+               linewidth=0.8)
+
+for i, (bar, beta, tstat, pval) in enumerate(zip(bars, 
+                                                 labor_beta_df_sorted["beta"],
+                                                 labor_beta_df_sorted["beta_tstat"],
+                                                 labor_beta_df_sorted["beta_pvalue"])):
+    height = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+             f'{beta:.3f}',
+             ha='center', va='bottom', fontweight='bold')
+    
+
+plt.axhline(0, color="black", linewidth=0.8, linestyle="-")
+plt.title("Labor Income Beta by Income Group\n" + 
+          r"$\Delta \ln(LABINC_{g,t}) = \alpha_g + \beta_g r_t + \varepsilon_{g,t}$",
+          fontsize=14)
+plt.xlabel("Income Group", fontsize=12)
+plt.ylabel(r"Labor Income Beta ($\beta_g$)", fontsize=12)
+plt.grid(True, alpha=0.3, axis='y')
+
+plt.tight_layout()
+plt.show()
 # %%
