@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
 
 RAW_DIR = r"e:\users_ra_local\fang_ray\Lifecycle-portfolio-allocation\raw"
 OUT_DIR = r"e:\users_ra_local\fang_ray\Lifecycle-portfolio-allocation\outputs"
@@ -140,3 +141,119 @@ ecm_table.to_csv(fr"{OUT_DIR}/ecm_sp500div.csv", index=False)
 
 print(adf_table)
 print(ecm_table)
+# %%
+# Part B — Construct Short-Run Labor-Income Betas by Income Group
+
+sp_full = pd.read_csv(SP500DIV_CSV)
+if sp_full.shape[1] == 1:
+    sp_full.columns = ["div_level"]
+    sp_full["YEAR"] = sp_full.index + sp_full.index.min()
+else:
+    sp_full.columns = ["YEAR", "div_level"]
+
+sp_full = sp_full.sort_values("YEAR")
+
+sp_full["div_growth"] = sp_full["div_level"].pct_change()
+
+print("S&P 500 dividend data:")
+print(sp_full.head(10))
+
+group_means = pd.read_csv(GROUP_MEANS_CSV)
+group_means_sorted = group_means.sort_values(["incgroup", "YEAR"]).reset_index(drop=True)
+group_means_sorted["dln_LABINC"] = group_means_sorted.groupby("incgroup")["ln_RLABINC"].diff()
+
+labor_beta_panel_sp500 = group_means_sorted.merge(
+    sp_full[["YEAR", "div_growth"]], 
+    on="YEAR", 
+    how="inner"
+)
+
+print("\nLabor income growth and S&P 500 dividend growth panel:")
+print(labor_beta_panel_sp500.head())
+
+def estimate_labor_beta_sp500(group_data):
+    reg_data = group_data.dropna(subset=["dln_LABINC", "div_growth"])
+    
+    if len(reg_data) < 5:
+        return {
+            "beta": np.nan,
+            "beta_tstat": np.nan,
+            "beta_pvalue": np.nan,
+            "alpha": np.nan,
+            "r_squared": np.nan,
+            "n_obs": len(reg_data)
+        }
+
+    Y = reg_data["dln_LABINC"]
+    X = sm.add_constant(reg_data["div_growth"])
+    
+    model = sm.OLS(Y, X).fit()
+    
+    return {
+        "beta": model.params["div_growth"],
+        "beta_tstat": model.tvalues["div_growth"],
+        "beta_pvalue": model.pvalues["div_growth"],
+        "alpha": model.params["const"],
+        "r_squared": model.rsquared,
+        "n_obs": int(model.nobs)
+    }
+
+beta_results_sp500 = []
+
+for group in labor_beta_panel_sp500["incgroup"].unique():
+    group_data = labor_beta_panel_sp500[labor_beta_panel_sp500["incgroup"] == group]
+    
+    result = estimate_labor_beta_sp500(group_data)
+    result["incgroup"] = group
+    
+    beta_results_sp500.append(result)
+
+labor_beta_sp500_df = pd.DataFrame(beta_results_sp500)
+labor_beta_sp500_df = labor_beta_sp500_df[["incgroup", "beta", "beta_tstat", "beta_pvalue", 
+                                           "alpha", "r_squared", "n_obs"]]
+
+print("\nLabor Income Beta Results (S&P 500 Dividend):")
+print(labor_beta_sp500_df)
+
+LABOR_BETA_SP500_CSV = fr"{OUT_DIR}/labor_income_betas_sp500.csv"
+
+labor_beta_sp500_df.to_csv(LABOR_BETA_SP500_CSV, index=False)
+
+print(f"\nSaved S&P 500 labor income beta results to: {LABOR_BETA_SP500_CSV}")
+
+# %%
+# Bar Chart of β_g across income groups (S&P 500)
+
+plt.figure(figsize=(10, 6))
+
+group_order = ["Bottom50", "Middle40", "Top10", "Top1"]
+labor_beta_sp500_df_sorted = labor_beta_sp500_df.set_index("incgroup").loc[group_order].reset_index()
+
+bars = plt.bar(labor_beta_sp500_df_sorted["incgroup"], 
+               labor_beta_sp500_df_sorted["beta"], 
+               color=["lightcoral", "lightblue", "lightgreen", "gold"],
+               edgecolor="black",
+               linewidth=0.8)
+
+for i, (bar, beta, tstat, pval) in enumerate(zip(bars, 
+                                                 labor_beta_sp500_df_sorted["beta"],
+                                                 labor_beta_sp500_df_sorted["beta_tstat"],
+                                                 labor_beta_sp500_df_sorted["beta_pvalue"])):
+    height = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+             f'{beta:.3f}',
+             ha='center', va='bottom', fontweight='bold')
+    
+plt.axhline(0, color="black", linewidth=0.8, linestyle="-")
+plt.title("Labor Income Beta by Income Group\n" + 
+          r"$\Delta \ln(LABINC_{g,t}) = \alpha_g + \beta_g \cdot DIV\_GROWTH_t + \varepsilon_{g,t}$",
+          fontsize=14)
+plt.xlabel("Income Group", fontsize=12)
+plt.ylabel(r"Labor Income Beta ($\beta_g$)", fontsize=12)
+plt.grid(True, alpha=0.3, axis='y')
+
+
+plt.tight_layout()
+plt.show()
+
+    
