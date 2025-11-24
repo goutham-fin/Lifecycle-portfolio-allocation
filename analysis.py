@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np 
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
+import statsmodels.formula.api as smf
 
 # %%
 RAW_DIR      = r"E:/users_ra_local/fang_ray/IPUMS-CPS/raw"
@@ -427,4 +428,115 @@ final_path = r"E:/users_ra_local/fang_ray/IPUMS-CPS/outputs/cps_adf_final_panel.
 final_table.to_csv(final_path, index=False)
 
 final_table.head()
+# %%
+# Identify outliers
+# Outlier: Δy > 0.10 for any income group
+threshold = 0.10
+
+outliers = (
+    panel.loc[panel["dy_gt"].abs() > threshold,
+              ["YEAR", "incgroup", "dy_gt"]]
+    .sort_values(["YEAR", "incgroup"])
+)
+
+print("\nOutlier Δy_gt > 0.10:")
+print(outliers)
+
+outliers_wide = (
+    panel.assign(abs_dy=lambda x: x["dy_gt"].abs())
+          .pivot_table(index="YEAR",
+                       columns="incgroup",
+                       values="dy_gt")
+)
+outliers_wide = outliers_wide[outliers_wide.abs().max(axis=1) > threshold]
+
+print(outliers_wide)
+
+years_to_plot = sorted(outliers["YEAR"].unique())
+
+for yr in years_to_plot:
+    window = panel[(panel["YEAR"] >= yr - 3) & (panel["YEAR"] <= yr + 3)]
+
+    fig, ax = plt.subplots(figsize=(8,4))
+    for g in window["incgroup"].unique():
+        sub = window[window["incgroup"] == g]
+        ax.plot(sub["YEAR"], sub["dy_gt"], marker="o", label=g)
+
+    ax.axhline(0.10, color="red", linestyle="--", alpha=0.6)
+    ax.axhline(-0.10, color="red", linestyle="--", alpha=0.6)
+
+    ax.set_title(f"Δy_gt Around Outlier Year {yr}")
+    ax.set_ylabel("Δy_gt")
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+# %%
+# Panel ECM robustness
+def run_panel_ecm(panel, L=2, top_label="Top1", hac_lags=None):
+    """
+    Pooled ECM with group fixed effects.
+    """
+    df = panel.sort_values(["incgroup", "YEAR"]).copy()
+
+    df["y_gt_lag"] = df.groupby("incgroup")["y_gt"].shift(1)
+    df["dy_gt"]    = df.groupby("incgroup")["y_gt"].diff()
+
+    for j in range(1, L+1):
+        df[f"dy_lag{j}"] = df.groupby("incgroup")["dy_gt"].shift(j)
+
+    df["is_top"] = (df["incgroup"] == top_label).astype(int)
+
+    df["y_gt_lag_top"] = df["y_gt_lag"] * df["is_top"]
+
+    needed = ["dy_gt", "y_gt_lag", "t_index", "y_gt_lag_top"] + [f"dy_lag{j}" for j in range(1, L+1)]
+    df_reg = df.dropna(subset=needed).copy()
+
+    lag_terms = " + ".join([f"dy_lag{j}" for j in range(1, L+1)])
+    formula = f"dy_gt ~ C(incgroup) + t_index + y_gt_lag + y_gt_lag_top"
+    if L > 0:
+        formula += " + " + lag_terms
+
+    if hac_lags is None:
+        hac_lags = L 
+
+    res = smf.ols(formula, data=df_reg).fit(
+        cov_type="HAC", cov_kwds={"maxlags": hac_lags}
+    )
+
+    wald = res.wald_test("y_gt_lag_top = 0")
+
+    return res, wald
+
+L_list = [1, 2, 3]
+
+ecm_results = []
+
+for L in L_list:
+    res, wald = run_panel_ecm(panel, L=L, top_label="Top1", hac_lags=L)
+
+    print("\n" + "="*70)
+    print(f"PANEL ECM L={L}")
+    print(res.summary())
+
+    print("\nWald test H0: Top group has same a3 (y_gt_lag_top = 0)")
+    print(wald)
+
+    ecm_results.append({
+        "L": L,
+        "a3_common": res.params.get("y_gt_lag", np.nan),
+        "a3_common_t": res.tvalues.get("y_gt_lag", np.nan),
+        "a3_top_extra": res.params.get("y_gt_lag_top", np.nan),
+        "a3_top_extra_t": res.tvalues.get("y_gt_lag_top", np.nan),
+        "wald_stat": float(wald.statistic),
+        "wald_pvalue": float(wald.pvalue),
+        "n_obs": int(res.nobs)
+    })
+
+ecm_table = pd.DataFrame(ecm_results)
+print("\nECM robustness summary:")
+print(ecm_table)
+
+ECM_CSV = fr"{OUT_DIR}/panel_ecm_robustness.csv"
+ecm_table.to_csv(ECM_CSV, index=False)
+print(f"\nSaved: {ECM_CSV}")
 # %%
