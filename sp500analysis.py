@@ -99,22 +99,20 @@ def run_panel_ecm(panel, L=2, top_label="Top1", hac_lags=None):
         cov_type="HAC", cov_kwds={"maxlags": hac_lags}
     )
 
-    wald = res.wald_test("y_gt_lag_top = 0")
+    wald = res.wald_test("y_gt_lag_top = 0", scalar=True)
 
     return res, wald
 
 group_means = pd.read_csv(GROUP_MEANS_CSV)
+sp = pd.read_csv(SP500DIV_CSV) 
+sp = sp.sort_values("Year")
+sp["log_div_t"] = np.log(sp["Dividend"])
 
-sp = pd.read_csv(SP500DIV_CSV, names=["YEAR", "div_level"])
-sp = sp.sort_values("YEAR")
-sp["log_div_t"] = np.log(sp["div_level"])
-
-panel = group_means.merge(sp[["YEAR", "log_div_t"]], on="YEAR", how="inner")
+panel = group_means.merge(sp[["Year", "log_div_t"]], left_on="YEAR", right_on="Year", how="inner")
 
 panel["y_gt"] = panel["ln_RLABINC"] - panel["log_div_t"]
-panel = panel.sort_values(["incgroup", "YEAR"]).reset_index(drop=True)
-
-panel["dy_gt"]   = panel.groupby("incgroup")["y_gt"].diff()
+panel = panel.sort_values(["incgroup", "YEAR"]).reset_index(drop=True) 
+panel["dy_gt"] = panel.groupby("incgroup")["y_gt"].diff()
 panel["t_index"] = panel["YEAR"] - panel["YEAR"].min()
 
 PANEL_SP500_CSV = fr"{OUT_DIR}/cps_income_sp500_panel.csv"
@@ -146,14 +144,14 @@ print(ecm_table)
 
 sp_full = pd.read_csv(SP500DIV_CSV)
 if sp_full.shape[1] == 1:
-    sp_full.columns = ["div_level"]
-    sp_full["YEAR"] = sp_full.index + sp_full.index.min()
+    sp_full.columns = ["Dividend"]
+    sp_full["Year"] = sp_full.index + sp_full.index.min()
 else:
-    sp_full.columns = ["YEAR", "div_level"]
+    sp_full.columns = ["Year", "Dividend"]
 
-sp_full = sp_full.sort_values("YEAR")
+sp_full = sp_full.sort_values("Year")
 
-sp_full["div_growth"] = sp_full["div_level"].pct_change()
+sp_full["div_growth"] = sp_full["Dividend"].pct_change()
 
 print("S&P 500 dividend data:")
 print(sp_full.head(10))
@@ -163,8 +161,9 @@ group_means_sorted = group_means.sort_values(["incgroup", "YEAR"]).reset_index(d
 group_means_sorted["dln_LABINC"] = group_means_sorted.groupby("incgroup")["ln_RLABINC"].diff()
 
 labor_beta_panel_sp500 = group_means_sorted.merge(
-    sp_full[["YEAR", "div_growth"]], 
-    on="YEAR", 
+    sp_full[["Year", "div_growth"]], 
+    left_on="YEAR", 
+    right_on="Year", 
     how="inner"
 )
 
@@ -257,3 +256,4 @@ plt.tight_layout()
 plt.show()
 
     
+# %%
