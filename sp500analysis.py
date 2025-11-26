@@ -99,7 +99,7 @@ def run_panel_ecm(panel, L=2, top_label="Top1", hac_lags=None):
         cov_type="HAC", cov_kwds={"maxlags": hac_lags}
     )
 
-    wald = res.wald_test("y_gt_lag_top = 0")
+    wald = res.wald_test("y_gt_lag_top = 0", scalar=True)
 
     return res, wald
 
@@ -157,12 +157,13 @@ print("S&P 500 dividend data:")
 print(sp_full.head(10))
 
 group_means = pd.read_csv(GROUP_MEANS_CSV)
-group_means_sorted = group_means.sort_values(["incgroup", "Year"]).reset_index(drop=True)
+group_means_sorted = group_means.sort_values(["incgroup", "YEAR"]).reset_index(drop=True)
 group_means_sorted["dln_LABINC"] = group_means_sorted.groupby("incgroup")["ln_RLABINC"].diff()
 
 labor_beta_panel_sp500 = group_means_sorted.merge(
     sp_full[["Year", "div_growth"]], 
-    on="Year", 
+    left_on="YEAR", 
+    right_on="Year", 
     how="inner"
 )
 
@@ -255,3 +256,4 @@ plt.tight_layout()
 plt.show()
 
     
+# %%
