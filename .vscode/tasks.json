@@ -1,0 +1,16 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Analysis with 8 Income Groups",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"analysis.py"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}
