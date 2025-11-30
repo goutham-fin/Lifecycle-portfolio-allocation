@@ -9,7 +9,6 @@ import statsmodels.formula.api as smf
 RAW_DIR      = r"E:/users_ra_local/fang_ray/Lifecycle-portfolio-allocation/raw"
 OUT_DIR      = r"E:/users_ra_local/fang_ray/Lifecycle-portfolio-allocation/outputs"
 
-CPS_CSV      = fr"{RAW_DIR}/cps_00001.csv"
 CPI_CSV      = fr"{RAW_DIR}/cpi_u.csv"
 CRSP_CSV     = fr"{RAW_DIR}/crsp_value_weighted.csv"
 
@@ -18,26 +17,11 @@ GROUPS_CSV    = fr"{OUT_DIR}/cps_income_groups_1968_2024.csv"
 GROUPS_DTA    = fr"{OUT_DIR}/cps_income_groups_1968_2024.dta"
 
 # %%
-df  = pd.read_csv(CPS_CSV)
+# Load market data
 cpi = pd.read_csv(CPI_CSV)
 crsp = pd.read_csv(CRSP_CSV)
-df.to_parquet(fr"{OUT_DIR}/cps_00001_raw.parquet", index=False)
 
-# %%
-df = df[(df["AGE"] >= 25) & (df["AGE"] <= 60)]
-df = df[df["UHRSWORKLY"] >= 20]
-df = df[df["WKSWORK1"] >= 26]
-
-keep = [
-    "YEAR", "CPSIDP", "AGE",
-    "INCWAGE", "INCBUS",
-    "UHRSWORKLY", "WKSWORK1",
-    "ASECWT", "EMPSTAT",
-]
-df = df[keep]
-
-df["LABINC"] = df[["INCWAGE", "INCBUS"]].clip(lower=0).sum(axis=1)
-
+# Prepare CPI data for later use
 cpi["Year"] = cpi["Year"].astype(int)
 annual_cpi = (
     cpi.groupby("Year")["Value"]
@@ -48,68 +32,16 @@ annual_cpi = (
 
 BASE_YEAR = 2000
 base_cpi = annual_cpi.loc[annual_cpi["Year"] == BASE_YEAR, "CPI_U"].iloc[0]
-annual_cpi["CPI_REL"] = annual_cpi["CPI_U"] / base_cpi 
-
-df = df.merge(
-    annual_cpi[["Year", "CPI_REL"]],
-    left_on="YEAR",
-    right_on="Year",
-    how="left"
-).drop(columns=["Year"])
-
-df["RLABINC"] = df["LABINC"] / df["CPI_REL"]
-
-df = df[df["RLABINC"] > 0]
-# %%
-cut_probs = np.array([0.50, 0.90, 0.99]) 
-
-def weighted_percentiles(values, weights, probs):
-    """Compute weighted percentiles for a 1D array."""
-    values = np.asarray(values)
-    weights = np.asarray(weights)
-    sorter = np.argsort(values)
-    v = values[sorter]
-    w = weights[sorter]
-
-    cum_w = np.cumsum(w)
-    total_w = cum_w[-1]
-    pct = cum_w / total_w
-
-    return np.interp(probs, pct, v)
-
-def assign_income_group(g):
-    vals = g["RLABINC"].to_numpy()
-    wts  = g["ASECWT"].to_numpy()
-
-    cuts = weighted_percentiles(vals, wts, cut_probs)
-    bins = np.concatenate(([-np.inf], cuts, [np.inf]))
-
-    labels = ["Bottom50", "Middle40", "Top10", "Top1"]
-
-    g["Income_Group"] = pd.cut(
-        g["RLABINC"],
-        bins=bins,
-        labels=labels,
-        right=True,
-        include_lowest=True
-    )
-
-    return g
-
-df = df.groupby("YEAR", group_keys=False).apply(assign_income_group)
+annual_cpi["CPI_REL"] = annual_cpi["CPI_U"] / base_cpi
 
 # %%
-df["ln_RLABINC"] = np.log(df["RLABINC"])
+# Load the pre-computed income group data from generate_8income_groups.py
+print("Loading pre-computed income group data...")
+group_means = pd.read_csv(GROUPS_CSV)
+print(f"Available income groups: {sorted(group_means['incgroup'].unique())}")
+print(f"Year range: {group_means['YEAR'].min()} - {group_means['YEAR'].max()}")
 
-group_means = (
-    df.groupby(["YEAR", "Income_Group"])
-      .apply(lambda g: np.average(g["ln_RLABINC"], weights=g["ASECWT"]))
-      .reset_index(name="ln_RLABINC")
-      .rename(columns={"Income_Group": "incgroup"})
-)
-
-df.to_parquet(CLEAN_PARQUET, index=False)
-group_means.to_csv(GROUPS_CSV, index=False)
+# Save to Stata format
 group_means.to_stata(GROUPS_DTA, write_index=False)
 
 # %%
@@ -228,7 +160,7 @@ table_A = table_A.rename(columns={
     "a3_pvalue": "p-value"
 })
 
-latex_path_A = r"E:/users_ra_local/fang_ray/IPUMS-CPS/outputs/table_A_adf.tex"
+latex_path_A = fr"{OUT_DIR}/table_A_adf.tex"
 
 table_A.to_latex(
     latex_path_A,
@@ -261,7 +193,7 @@ table_B_export = table_B_export.rename(columns={
     "r2": "$R^2$"
 })
 
-latex_path_B = r"E:/users_ra_local/fang_ray/IPUMS-CPS/outputs/table_B_adf_lag_sensitivity.tex"
+latex_path_B = fr"{OUT_DIR}/table_B_adf_lag_sensitivity.tex"
 
 table_B_export.to_latex(
     latex_path_B,
@@ -273,128 +205,35 @@ table_B_export.to_latex(
     label="tab:adf_lag_sensitivity"
 )
 # %%
-# Plotting weighted means over time
+# Key Plots and Analysis
+print("Generating key plots...")
+
+# 1. Income trends over time
 plt.figure(figsize=(12, 6))
-
-group_order = ["Bottom50", "Middle40", "Top10", "Top1"]
-
+group_order = ["Group1", "Group2", "Group3", "Group4", "Group5", "Group6", "Group7", "Group8"]
 for g in group_order:
     subset = group_means[group_means["incgroup"] == g]
     plt.plot(subset["YEAR"], subset["ln_RLABINC"], label=g)
 
-plt.title("Weighted Mean log(RLABINC) by Income Bucket, 1976–2024")
+plt.title("Weighted Mean log(RLABINC) by Income Group, 1976–2024")
 plt.xlabel("Year")
 plt.ylabel("ln(RLABINC)")
-plt.legend(title="Income Bucket")
+plt.legend(title="Income Group")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# %%
-# Plotting weighted shares over time for verification
-share_check = (
-    df.groupby(["YEAR", "Income_Group"])
-      .apply(lambda g: g["ASECWT"].sum())
-      .reset_index(name="group_weight")
-)
-
-total_weights = (
-    df.groupby("YEAR")["ASECWT"].sum().reset_index(name="total_weight")
-)
-
-share_check = share_check.merge(total_weights, on="YEAR")
-share_check["share"] = share_check["group_weight"] / share_check["total_weight"] * 100
-
-plt.figure(figsize=(12, 6))
-
-group_order = ["Bottom50", "Middle40", "Top10", "Top1"]
-
-for g in group_order:
-    subset = share_check[share_check["Income_Group"] == g]
-    plt.plot(subset["YEAR"], subset["share"], label=g)
-
-plt.axhline(50, color="gray", linestyle="dashed", linewidth=0.5)
-plt.axhline(40, color="gray", linestyle="dashed", linewidth=0.5)
-plt.axhline(10, color="gray", linestyle="dashed", linewidth=0.5)
-plt.axhline(1,  color="gray", linestyle="dashed", linewidth=0.5)
-
-plt.title("Income Bucket Weighted Shares over Time")
-plt.xlabel("Year")
-plt.ylabel("Share of Weighted Population (%)")
-plt.legend(title="Income Bucket")
-plt.tight_layout()
-plt.show()
-# %%
-# Plotting dividend returns and log real dividend index
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-
-ax1.plot(annual["YEAR"], annual["ANNUAL_DIV_RETURN"] * 100,
-         label="Nominal Dividend Return", linewidth=2)
-ax1.set_title("Annual Nominal Dividend Returns")
-ax1.set_xlabel("Year")
-ax1.set_ylabel("Dividend Return (%)")
-ax1.legend()
-ax1.grid(True, alpha=0.3)
-
-ax2.plot(annual["YEAR"], annual["log_div_t"], linewidth=2)
-ax2.set_title("Log Real Dividend Index")
-ax2.set_xlabel("Year")
-ax2.set_ylabel("log(real dividend index)")
-ax2.grid(True, alpha=0.3)
-
-plt.tight_layout()
-plt.show()
-# %%
-# Plot y_{g,t}
+# 2. Labor-Dividend ratio by group
 groups = sorted(panel["incgroup"].unique())
-
 plt.figure(figsize=(12, 8))
 for g in groups:
     subset = panel[panel["incgroup"] == g]
-    plt.plot(subset["YEAR"], subset["y_gt"], label=f"Group {g}", linewidth=1.6)
+    plt.plot(subset["YEAR"], subset["y_gt"], label=f"{g}", linewidth=1.6)
 
 plt.title("Labor–Dividend Log Ratio $y_{g,t}$ by Income Group")
 plt.xlabel("Year")
 plt.ylabel("$y_{g,t} = \\ln(RLABINC_g) - \\ln(DIV_t)$")
 plt.grid(alpha=0.3)
-plt.legend()
-plt.tight_layout()
-plt.show()
-# %%
-# Plot Δy_{g,t}
-groups = sorted(panel["incgroup"].unique())
-
-for g in groups:
-    subset = panel[panel["incgroup"] == g]
-    plt.plot(subset["YEAR"], subset["dy_gt"], label=f"Group {g}", linewidth=1.2)
-
-plt.title("First Difference of Labor–Dividend Ratio $\\Delta y_{g,t}$")
-plt.xlabel("Year")
-plt.ylabel("$\\Delta y_{g,t}$")
-plt.grid(alpha=0.3)
-plt.legend()
-plt.tight_layout()
-plt.show()
-# %%
-# Bar chart of ADF coefficients by income group
-plt.figure(figsize=(10, 6))
-plt.bar(bcg_df["incgroup"], bcg_df["a3_coef"], color="steelblue")
-
-plt.axhline(0, color="black", linewidth=0.8)
-plt.title("ADF Coefficient $a_3$ by Income Group (L = 2)")
-plt.xlabel("Income Group")
-plt.ylabel("$a_3$")
-plt.tight_layout()
-plt.show()
-# %%
-# Bar chart of ADF t-statistics by income group
-plt.figure(figsize=(10, 6))
-plt.bar(bcg_df["incgroup"], bcg_df["a3_tstat"], color="darkorange")
-
-plt.axhline(-1.95, linestyle="--", color="red", label="5% critical (approx)")
-plt.title("ADF t-statistic of $a_3$ by Income Group")
-plt.xlabel("Income Group")
-plt.ylabel("t-stat($a_3$)")
 plt.legend()
 plt.tight_layout()
 plt.show()
@@ -424,52 +263,10 @@ final_table = panel_clean[[
     "ln_RLABINC_t"
 ]].dropna()
 
-final_path = r"E:/users_ra_local/fang_ray/IPUMS-CPS/outputs/cps_adf_final_panel.csv"
+final_path = fr"{OUT_DIR}/cps_adf_final_panel.csv"
 final_table.to_csv(final_path, index=False)
 
 final_table.head()
-# %%
-# Identify outliers
-# Outlier: Δy > 0.10 for any income group
-threshold = 0.10
-
-outliers = (
-    panel.loc[panel["dy_gt"].abs() > threshold,
-              ["YEAR", "incgroup", "dy_gt"]]
-    .sort_values(["YEAR", "incgroup"])
-)
-
-print("\nOutlier Δy_gt > 0.10:")
-print(outliers)
-
-outliers_wide = (
-    panel.assign(abs_dy=lambda x: x["dy_gt"].abs())
-          .pivot_table(index="YEAR",
-                       columns="incgroup",
-                       values="dy_gt")
-)
-outliers_wide = outliers_wide[outliers_wide.abs().max(axis=1) > threshold]
-
-print(outliers_wide)
-
-years_to_plot = sorted(outliers["YEAR"].unique())
-
-for yr in years_to_plot:
-    window = panel[(panel["YEAR"] >= yr - 3) & (panel["YEAR"] <= yr + 3)]
-
-    fig, ax = plt.subplots(figsize=(8,4))
-    for g in window["incgroup"].unique():
-        sub = window[window["incgroup"] == g]
-        ax.plot(sub["YEAR"], sub["dy_gt"], marker="o", label=g)
-
-    ax.axhline(0.10, color="red", linestyle="--", alpha=0.6)
-    ax.axhline(-0.10, color="red", linestyle="--", alpha=0.6)
-
-    ax.set_title(f"Δy_gt Around Outlier Year {yr}")
-    ax.set_ylabel("Δy_gt")
-    ax.legend()
-    plt.tight_layout()
-    plt.show()
 # %%
 # Panel ECM robustness
 def run_panel_ecm(panel, L=2, top_label="Top1", hac_lags=None):
@@ -512,7 +309,7 @@ L_list = [1, 2, 3]
 ecm_results = []
 
 for L in L_list:
-    res, wald = run_panel_ecm(panel, L=L, top_label="Top1", hac_lags=L)
+    res, wald = run_panel_ecm(panel, L=L, top_label="Group8", hac_lags=L)
 
     print("\n" + "="*70)
     print(f"PANEL ECM L={L}")
@@ -593,41 +390,242 @@ labor_beta_df = labor_beta_df[["incgroup", "beta", "beta_tstat", "beta_pvalue",
 print("\nLabor Income Beta Results:")
 print(labor_beta_df)
 
-LABOR_BETA_CSV = fr"{OUT_DIR}/labor_income_betas.csv"
+# Note: Enhanced analysis with SP500 comparison is performed in the section below
 
+# Save CRSP labor beta results
+LABOR_BETA_CSV = fr"{OUT_DIR}/labor_income_betas.csv"
 labor_beta_df.to_csv(LABOR_BETA_CSV, index=False)
 
 # %%
-# Bar chart of labor income betas by income group
-plt.figure(figsize=(10, 6))
+# Enhanced Analysis with 8 Income Groups - SP500 Comparison
+print("Loading SP500 data for comparison analysis...")
+sp500 = pd.read_csv(fr"{RAW_DIR}/sp500div.csv")
 
-group_order = ["Bottom50", "Middle40", "Top10", "Top1"]
-labor_beta_df_sorted = labor_beta_df.set_index("incgroup").loc[group_order].reset_index()
+# Process SP500 data
+sp500["YEAR"] = sp500["DATE"].str[:4].astype(int)
+sp500_annual = (
+    sp500.groupby("YEAR")["DIV_YIELD"]
+         .apply(lambda x: (1 + x).prod() - 1)
+         .reset_index()
+         .rename(columns={"DIV_YIELD": "ANNUAL_DIV_RETURN"})
+)
 
-bars = plt.bar(labor_beta_df_sorted["incgroup"], 
-               labor_beta_df_sorted["beta"], 
-               color=["lightcoral", "lightblue", "lightgreen", "gold"],
-               edgecolor="black",
-               linewidth=0.8)
+# Merge with CPI data and create real dividend index
+sp500_annual = sp500_annual.merge(
+    annual_cpi[["Year", "CPI_REL"]], left_on="YEAR", right_on="Year", how="inner"
+).drop(columns=["Year"]).sort_values("YEAR")
 
-for i, (bar, beta, tstat, pval) in enumerate(zip(bars, 
-                                                 labor_beta_df_sorted["beta"],
-                                                 labor_beta_df_sorted["beta_tstat"],
-                                                 labor_beta_df_sorted["beta_pvalue"])):
-    height = bar.get_height()
-    plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-             f'{beta:.3f}',
-             ha='center', va='bottom', fontweight='bold')
-    
+sp500_annual["DIV_INDEX_REAL"] = (1 + sp500_annual["ANNUAL_DIV_RETURN"]).cumprod() / sp500_annual["CPI_REL"]
+sp500_annual["log_div_t"] = np.log(sp500_annual["DIV_INDEX_REAL"])
 
-plt.axhline(0, color="black", linewidth=0.8, linestyle="-")
-plt.title("Labor Income Beta by Income Group\n" + 
-          r"$\Delta \ln(LABINC_{g,t}) = \alpha_g + \beta_g r_t + \varepsilon_{g,t}$",
-          fontsize=14)
-plt.xlabel("Income Group", fontsize=12)
-plt.ylabel(r"Labor Income Beta ($\beta_g$)", fontsize=12)
+# Create SP500 panel and run ADF tests
+sp500_panel = group_means.merge(sp500_annual[["YEAR", "log_div_t"]], on="YEAR", how="inner")
+sp500_panel["y_gt"] = sp500_panel["ln_RLABINC"] - sp500_panel["log_div_t"]
+sp500_panel = sp500_panel.sort_values(["incgroup", "YEAR"]).reset_index(drop=True)
+sp500_panel["dy_gt"] = sp500_panel.groupby("incgroup")["y_gt"].diff()
+sp500_panel["t_index"] = sp500_panel["YEAR"] - sp500_panel["YEAR"].min()
+
+sp500_adf = run_bcg_adf(sp500_panel, L=2)
+
+# Save SP500 results
+sp500_panel.to_csv(fr"{OUT_DIR}/cps_income_sp500_panel.csv", index=False)
+sp500_adf.to_csv(fr"{OUT_DIR}/adf_sp500div.csv", index=False)
+
+print("SP500 ADF Results:")
+print(sp500_adf[["incgroup", "a3_coef", "a3_tstat", "a3_pvalue"]])
+
+# CRSP vs SP500 ADF comparison plot
+plt.figure(figsize=(12, 6))
+x = np.arange(len(bcg_df))
+width = 0.35
+
+plt.bar(x - width/2, bcg_df["a3_coef"], width, label='CRSP', alpha=0.8)
+plt.bar(x + width/2, sp500_adf["a3_coef"], width, label='SP500', alpha=0.8)
+
+plt.xlabel('Income Group')
+plt.ylabel('ADF Coefficient (a₃)')
+plt.title('ADF Coefficients: CRSP vs SP500 Dividends (8 Income Groups)')
+plt.xticks(x, bcg_df["incgroup"])
+plt.legend()
 plt.grid(True, alpha=0.3, axis='y')
+plt.axhline(0, color='black', linewidth=0.8)
+plt.tight_layout()
+
+comparison_plot_path = fr"{OUT_DIR}/adf_comparison_crsp_vs_sp500.png"
+plt.savefig(comparison_plot_path, dpi=300, bbox_inches='tight')
+plt.show()
+
+# %%
+# Enhanced Labor Income Beta Analysis
+print("Calculating labor income betas...")
+
+# Load SP500 return data
+sp500_data = pd.read_csv(fr"{RAW_DIR}/sp500div.csv")
+sp500_data["YEAR"] = sp500_data["DATE"].str[:4].astype(int)
+
+# Use dividend yield as return proxy for SP500
+sp500_returns = (
+    sp500_data.groupby("YEAR")["DIV_YIELD"]
+             .apply(lambda x: (1 + x).prod() - 1)
+             .reset_index()
+             .rename(columns={"DIV_YIELD": "annual_return"})
+)
+
+# Calculate betas for both CRSP and SP500
+beta_analyses = {"CRSP": crsp_annual, "SP500": sp500_returns}
+all_beta_results = []
+
+for data_source, return_data in beta_analyses.items():
+    # Merge with labor income data
+    beta_panel = group_means.merge(return_data, on="YEAR", how="inner")
+    beta_panel = beta_panel.sort_values(["incgroup", "YEAR"]).reset_index(drop=True)
+    beta_panel["dln_LABINC"] = beta_panel.groupby("incgroup")["ln_RLABINC"].diff()
+    
+    # Estimate betas for each income group
+    for group in beta_panel["incgroup"].unique():
+        group_data = beta_panel[beta_panel["incgroup"] == group]
+        result = estimate_labor_beta(group_data.dropna(subset=["dln_LABINC", "annual_return"]))
+        result["incgroup"] = group
+        result["data_source"] = data_source
+        all_beta_results.append(result)
+
+# Save comprehensive results
+all_beta_df = pd.DataFrame(all_beta_results)
+all_beta_df.to_csv(fr"{OUT_DIR}/labor_income_betas_comprehensive.csv", index=False)
+
+# Create comparison plot
+plt.figure(figsize=(14, 6))
+crsp_betas = all_beta_df[all_beta_df["data_source"] == "CRSP"]
+sp500_betas = all_beta_df[all_beta_df["data_source"] == "SP500"]
+
+x = np.arange(len(crsp_betas))
+width = 0.35
+
+plt.bar(x - width/2, crsp_betas["beta"], width, label='CRSP', alpha=0.8, color='steelblue')
+plt.bar(x + width/2, sp500_betas["beta"], width, label='SP500', alpha=0.8, color='orange')
+
+plt.xlabel('Income Group')
+plt.ylabel('Labor Income Beta (β)')
+plt.title('Labor Income Betas: CRSP vs SP500 Returns (8 Income Groups)')
+plt.xticks(x, crsp_betas["incgroup"])
+plt.legend()
+plt.grid(True, alpha=0.3, axis='y')
+plt.axhline(0, color='black', linewidth=0.8)
+plt.tight_layout()
+plt.show()
+
+# %%
+# Summary Statistics and Results
+print("\n" + "="*80)
+print("ANALYSIS RESULTS - 8 INCOME GROUPS")
+print("="*80)
+
+print("\nADF Test Results (CRSP Dividends):")
+print(bcg_df[["incgroup", "a3_coef", "a3_tstat", "a3_pvalue"]].round(4))
+
+crsp_betas = all_beta_df[all_beta_df["data_source"] == "CRSP"]
+print(f"\nLabor Income Betas (CRSP Returns):")
+print(crsp_betas[["incgroup", "beta", "beta_tstat", "beta_pvalue"]].round(4))
+
+# Save summary statistics
+with open(fr"{OUT_DIR}/summary_statistics_8groups.csv", 'w') as f:
+    f.write("ADF Test Results (CRSP Dividends):\n")
+    f.write(bcg_df[["incgroup", "a3_coef", "a3_tstat", "a3_pvalue"]].to_csv(index=False))
+    f.write(f"\nLabor Income Betas:\n")
+    f.write(all_beta_df[["data_source", "incgroup", "beta", "beta_tstat", "beta_pvalue"]].to_csv(index=False))
+
+# %%
+# Enhanced Visualization
+# Combine ADF and Beta results for comprehensive display
+combined_results = bcg_df.merge(
+    labor_beta_df[["incgroup", "beta", "beta_pvalue"]], 
+    on="incgroup", 
+    suffixes=("_adf", "_beta")
+)
+
+# 4-panel comparison chart
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+
+# ADF coefficients
+ax1.bar(combined_results["incgroup"], combined_results["a3_coef"], 
+        color="steelblue", alpha=0.7, edgecolor="black")
+ax1.axhline(0, color="black", linewidth=0.8)
+ax1.set_title("ADF Coefficient ($a_3$)")
+ax1.set_ylabel("$a_3$")
+ax1.grid(True, alpha=0.3)
+
+# ADF t-statistics with significance
+adf_colors = ['red' if p < 0.05 else 'lightblue' for p in combined_results["a3_pvalue"]]
+ax2.bar(combined_results["incgroup"], combined_results["a3_tstat"], 
+        color=adf_colors, alpha=0.7, edgecolor="black")
+ax2.axhline(-1.95, linestyle="--", color="red", label="5% Critical")
+ax2.set_title("ADF t-statistics")
+ax2.set_ylabel("t-stat($a_3$)")
+ax2.legend()
+ax2.grid(True, alpha=0.3)
+
+# Labor Income Betas
+ax3.bar(combined_results["incgroup"], combined_results["beta"], 
+        color="darkorange", alpha=0.7, edgecolor="black")
+ax3.axhline(0, color="black", linewidth=0.8)
+ax3.set_title("Labor Income Beta ($β_g$)")
+ax3.set_ylabel("$β_g$")
+ax3.set_xlabel("Income Group")
+ax3.grid(True, alpha=0.3)
+
+# Beta significance
+beta_colors = ['green' if p < 0.05 else 'lightgreen' for p in combined_results["beta_pvalue"]]
+ax4.bar(combined_results["incgroup"], combined_results["beta"], 
+        color=beta_colors, alpha=0.7, edgecolor="black")
+ax4.axhline(0, color="black", linewidth=0.8)
+ax4.set_title("Labor Income Beta (Green = Significant)")
+ax4.set_ylabel("$β_g$")
+ax4.set_xlabel("Income Group")
+ax4.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.show()
+
+# Save combined results
+combined_results.to_csv(fr"{OUT_DIR}/combined_adf_beta_results.csv", index=False)
+
 # %%
+# Income Group Verification (2020 sample)
+full_df = pd.read_parquet(CLEAN_PARQUET)
+sample_data = full_df[full_df["YEAR"] == 2020].copy()
+
+if len(sample_data) > 0:
+    plt.figure(figsize=(12, 6))
+    
+    group_sizes = sample_data.groupby("Income_Group")["ASECWT"].sum()
+    group_shares = (group_sizes / group_sizes.sum() * 100)
+    
+    group_order = ["Group1", "Group2", "Group3", "Group4", "Group5", "Group6", "Group7", "Group8"]
+    group_shares_ordered = group_shares.reindex(group_order)
+    
+    plt.bar(group_order, group_shares_ordered, color="lightcoral", alpha=0.7, edgecolor="black")
+    plt.axhline(20, color="gray", linestyle="--", alpha=0.6)
+    plt.axhline(10, color="gray", linestyle="--", alpha=0.6)
+    plt.axhline(5, color="gray", linestyle="--", alpha=0.6)
+    plt.axhline(1, color="gray", linestyle="--", alpha=0.6)
+    plt.title("Income Group Shares (2020)")
+    plt.ylabel("Share (%)")
+    plt.xlabel("Income Group")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    print("Group shares in 2020:")
+    for group, share in group_shares_ordered.items():
+        print(f"{group}: {share:.1f}%")
+
+# %%
+print("\n" + "="*60)
+print("ANALYSIS COMPLETE - 8 INCOME GROUPS")
+print("="*60)
+print("Key Results:")
+print("  - ADF tests for unit root testing")
+print("  - Labor income betas vs market returns") 
+print("  - Panel ECM robustness checks")
+print("  - CRSP vs SP500 comparison analysis")
+print("="*60)

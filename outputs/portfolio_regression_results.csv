@@ -1,0 +1,7 @@
+risk_variable,coef,se,tstat,pvalue,n_obs,r_squared,regression_type
+beta_g,0.4533,0.705,0.643,0.5203,288557,0.3239,Participation
+a3_g,-0.8763,0.2206,-3.9714,0.0001,288557,0.3329,Participation
+INDEX_g,0.6619,0.1205,5.4942,0.0,288557,0.3335,Participation
+beta_g,0.3257,0.1347,2.4175,0.0156,79289,0.2789,Risky_Share
+a3_g,-0.177,0.3782,-0.4682,0.6397,79289,0.2744,Risky_Share
+INDEX_g,0.3416,0.1116,3.0616,0.0022,79289,0.2802,Risky_Share
